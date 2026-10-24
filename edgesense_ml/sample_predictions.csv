@@ -1,0 +1,41 @@
+condition,label,pred,p_anomaly
+Impeller damage|sev3|100%,1,1,1.0
+Misalignment angular|sev3|100%,1,1,1.0
+Cavitation|sev8|100%,1,1,1.0
+Cavitation|sev6|75%,1,1,1.0
+Healthy noisy environment|sev0|75%,0,1,0.53
+Unbalance motor|sev3|75%,1,1,1.0
+Misalignment angular|sev5|50%,1,1,1.0
+Cavitation|sev9|100%,1,1,1.0
+Unbalance motor|sev6|100%,1,1,1.0
+Cavitation|sev6|50%,1,1,1.0
+Healthy noisy environment|sev0|75%,0,1,0.59
+Misalignment angular|sev3|100%,1,1,1.0
+Cavitation|sev5|100%,1,1,1.0
+Bearing motor BPFO|sev3|50%,1,1,1.0
+Bearing pump BPFI+BPFO|sev1|100%,1,1,0.955
+Cavitation|sev5|100%,1,1,1.0
+Coupling degradation|sev3|75%,1,1,0.995
+Cavitation|sev2|75%,1,1,0.93
+Unbalance motor|sev6|100%,1,1,1.0
+Unbalance motor|sev2|100%,1,1,0.98
+Impeller damage|sev3|75%,1,1,1.0
+Bearing pump BPFI+BPFO|sev1|100%,1,1,0.99
+Healthy 1|sev0|75%,0,0,0.01
+Coupling degradation|sev1|100%,1,1,0.985
+Misalignment angular|sev5|50%,1,1,1.0
+Healthy noisy environment|sev0|75%,0,0,0.37
+Impeller damage|sev2|50%,1,1,0.975
+Healthy 2|sev0|75%,0,0,0.205
+Misalignment parallel|sev3|50%,1,1,1.0
+Healthy 2|sev0|75%,0,1,0.72
+Misalignment parallel|sev3|100%,1,1,1.0
+Healthy 2|sev0|75%,0,0,0.045
+Healthy 1|sev0|75%,0,0,0.04
+Impeller damage|sev3|50%,1,1,1.0
+Misalignment parallel|sev3|100%,1,1,1.0
+Healthy 2|sev0|75%,0,0,0.13
+Impeller damage|sev3|75%,1,1,1.0
+Stator winding short|sev1|100%,1,1,0.985
+Bearing pump BPFI+BPFO|sev1|100%,1,1,0.57
+Healthy 1|sev0|75%,0,0,0.09

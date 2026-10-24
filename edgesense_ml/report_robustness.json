@@ -1,0 +1,56 @@
+{
+  "n_per_scenario": 600,
+  "model": "model.joblib",
+  "scenarios": {
+    "clean_healthy": {
+      "kind": "healthy",
+      "n": 600,
+      "false_alarm_rate": 0.01
+    },
+    "inrange_hum_healthy": {
+      "kind": "healthy",
+      "n": 600,
+      "false_alarm_rate": 0.0767
+    },
+    "noisy_variant_healthy": {
+      "kind": "noisy",
+      "n": 600,
+      "false_alarm_rate": 0.0067
+    },
+    "clean_faults": {
+      "kind": "fault",
+      "n": 600,
+      "recall": 0.98,
+      "lowest_family_recall": {
+        "Bearing grease contamination": 0.667,
+        "Bearing motor BPFI": 1.0,
+        "Bearing motor BPFO": 1.0
+      }
+    },
+    "inrange_hum_faults": {
+      "kind": "fault",
+      "n": 600,
+      "recall": 0.9483,
+      "lowest_family_recall": {
+        "Bearing grease contamination": 0.325,
+        "Bearing motor BPFO": 0.917,
+        "Unbalance motor": 0.973
+      }
+    },
+    "ood_hum_healthy": {
+      "kind": "healthy",
+      "n": 600,
+      "false_alarm_rate": 0.8617
+    },
+    "ood_hum_faults": {
+      "kind": "fault",
+      "n": 600,
+      "recall": 0.9983,
+      "lowest_family_recall": {
+        "Bearing pump BPFI+BPFO": 0.974,
+        "Bearing grease contamination": 1.0,
+        "Bearing motor BPFI": 1.0
+      }
+    }
+  }
+}
