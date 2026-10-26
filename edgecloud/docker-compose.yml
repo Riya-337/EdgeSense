@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  edge-ml-service:
+    build: .
+    container_name: edgesense_local_ml
+    command: python mock_ml_service.py
+    ports:
+      - "8001:8001"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'     # Limit to 0.5 CPU core to simulate Edge Hardware
+          memory: 256M     # Limit to 256MB RAM
+
+  edgesense-engine:
+    build: .
+    container_name: edgesense_engine
+    command: python decision_engine.py
+    network_mode: "host"   # Allows monitoring host network interfaces
+    depends_on:
+      - edge-ml-service
