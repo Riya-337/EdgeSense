@@ -1,0 +1,4 @@
+.git
+edgecloud/cloudkey.pem
+**/__pycache__
+**/*.pyc

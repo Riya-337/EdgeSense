@@ -1,0 +1,1 @@
+ ssh -i edgecloud/cloudkey.pem cloudvm@20.204.11.46

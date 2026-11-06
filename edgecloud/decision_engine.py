@@ -1,12 +1,19 @@
-import time
+import csv
 import os
-import requests
+import time
+from pathlib import Path
+from typing import Any
+
 import psutil
-from typing import Dict, Any
+import requests
 
 # --- CONFIGURATION THRESHOLDS ---
 LOCAL_EDGE_URL = os.getenv("LOCAL_EDGE_URL", "http://localhost:8001/predict")
 CLOUD_URL = os.getenv("CLOUD_URL", "http://20.204.11.46:8002/predict")
+DEFAULT_SIMULATION_DATA = Path(__file__).resolve().parent.parent / "edgesense_ml" / "simulated_features.csv"
+if not DEFAULT_SIMULATION_DATA.is_file():
+    DEFAULT_SIMULATION_DATA = Path(__file__).resolve().parent / "edgesense_ml" / "simulated_features.csv"
+SIMULATION_METADATA = {"label", "fault", "severity", "speed", "condition", "hum"}
 
 MAX_LATENCY_THRESHOLD_MS = 100.0  # If Cloud latency > 100ms, fall back to Local
 EMERGENCY_VIB_THRESHOLD = 9.0    # Critical emergency -> Immediate local safety action
@@ -27,7 +34,7 @@ class NetworkProbe:
 
 
 class EdgeSenseDecisionEngine:
-    def inspect_system(self) -> Dict[str, float]:
+    def inspect_system(self) -> dict[str, float]:
         cpu_usage = psutil.cpu_percent(interval=None)
         cloud_latency = NetworkProbe.measure_latency(CLOUD_URL, timeout=0.5)
         return {
@@ -35,10 +42,10 @@ class EdgeSenseDecisionEngine:
             "cloud_latency_ms": cloud_latency
         }
 
-    def process_telemetry(self, sensor_payload: Dict[str, Any]) -> Dict[str, Any]:
+    def process_telemetry(self, sensor_payload: dict[str, Any]) -> dict[str, Any]:
         metrics = self.inspect_system()
         cloud_lat = metrics["cloud_latency_ms"]
-        vib = sensor_payload.get("vibration", 0.0)
+        vib = sensor_payload.get("features", {}).get("vib_peak", 0.0)
 
         reasoning = ""
         target = "AZURE_CLOUD"
@@ -66,71 +73,81 @@ class EdgeSenseDecisionEngine:
         if target == "AZURE_CLOUD":
             try:
                 res = requests.post(CLOUD_URL, json=sensor_payload, timeout=0.8)
-                if res.status_code == 200:
-                    out = res.json()
-                    out["routing_target"] = "AZURE_CLOUD"
-                    out["decision_reasoning"] = reasoning
-                    out["cloud_latency_ms"] = round(cloud_lat, 2)
-                    out["total_roundtrip_ms"] = round((time.time() - start_exec) * 1000, 2)
-                    return out
-            except Exception:
-                target = "LOCAL_EDGE (FALLBACK)"
-                reasoning += " | [AZURE TIMEOUT -> AUTOMATIC EDGE FALLBACK]"
-
-        # Process on Local Edge
-        try:
-            res = requests.post(LOCAL_EDGE_URL, json=sensor_payload, timeout=1.0)
-            if res.status_code == 200:
+                print("AZURE RESPONSE:", res.status_code, res.text)
+                res.raise_for_status()
                 out = res.json()
-                out["routing_target"] = target
+                out["routing_target"] = "AZURE_CLOUD"
                 out["decision_reasoning"] = reasoning
                 out["cloud_latency_ms"] = round(cloud_lat, 2)
                 out["total_roundtrip_ms"] = round((time.time() - start_exec) * 1000, 2)
                 return out
-        except Exception as e:
+            except requests.RequestException as e:
+                print(f"[CLOUD POST FAILED] {type(e).__name__}: {e}")
+                target = "LOCAL_EDGE (FALLBACK)"
+                reasoning += " | [AZURE REQUEST FAILED -> AUTOMATIC EDGE FALLBACK]"
+
+        # Process on Local Edge
+        try:
+            res = requests.post(LOCAL_EDGE_URL, json=sensor_payload, timeout=1.0)
+            res.raise_for_status()
+            out = res.json()
+            out["routing_target"] = target
+            out["decision_reasoning"] = reasoning
+            out["cloud_latency_ms"] = round(cloud_lat, 2)
+            out["total_roundtrip_ms"] = round((time.time() - start_exec) * 1000, 2)
+            return out
+        except requests.RequestException as e:
             return {
                 "processed_by": "ERROR",
                 "decision_reasoning": f"Local Edge unavailable: {e}",
                 "cloud_latency_ms": round(cloud_lat, 2)
             }
 
-        return {}
+def simulation_payload(row: dict[str, str]) -> dict[str, Any]:
+    metadata = {name: row[name] for name in SIMULATION_METADATA}
+    features = {
+        name: float(value)
+        for name, value in row.items()
+        if name not in SIMULATION_METADATA
+    }
+    return {"features": features, "simulation": metadata}
 
 
-# --- DEMO RUNNER ---
-if __name__ == "__main__":
+def run_simulation(source: Path, interval: float, limit: int) -> None:
     engine = EdgeSenseDecisionEngine()
-    import random
-    
-    print("\n==================================================================================")
-    print("        EDGESENSE CLOUD-FIRST HYBRID OFFLOADING DEMO                      ")
-    print("==================================================================================")
-    print(f" CONFIG THRESHOLDS:")
-    print(f"  - Default Processing Target: AZURE_CLOUD")
-    print(f"  - Max Network Latency Limit: {MAX_LATENCY_THRESHOLD_MS} ms")
-    print(f"  - Critical Emergency Limit : {EMERGENCY_VIB_THRESHOLD} units")
-    print("==================================================================================\n")
+    print("EdgeSense live simulation replay (synthetic data; one CSV row represents a 1-second window)")
+    print(f"Source: {source}")
+    print(f"Cloud latency limit: {MAX_LATENCY_THRESHOLD_MS} ms")
 
-    iteration = 1
-    try:
-        while True:
-            sample_sensor_data = {
-                "vibration": round(random.uniform(3.0, 10.0), 2),
-                "motor_current": round(random.uniform(8.0, 14.0), 2),
-                "timestamp": time.time()
-            }
+    with source.open(newline="") as stream:
+        rows = csv.DictReader(stream)
+        for iteration, row in enumerate(rows, start=1):
+            started = time.monotonic()
+            payload = simulation_payload(row)
+            features = payload["features"]
+            out = engine.process_telemetry(payload)
+            print(
+                f"[{iteration}] {row['condition']} | "
+                f"truth={int(row['label'])} prediction={out.get('is_anomaly')} "
+                f"P(anomaly)={out.get('confidence')} | "
+                f"vib_rms={features['vib_rms']:.3f} cur_rms={features['cur_rms']:.3f} | "
+                f"route={out.get('routing_target')} "
+                f"cloud={out.get('cloud_latency_ms')}ms "
+                f"roundtrip={out.get('total_roundtrip_ms')}ms"
+            )
+            if limit and iteration >= limit:
+                break
+            time.sleep(max(0.0, interval - (time.monotonic() - started)))
 
-            out = engine.process_telemetry(sample_sensor_data)
-            
-            print(f"[SAMPLE #{iteration}] Vib: {sample_sensor_data['vibration']} | Current: {sample_sensor_data['motor_current']}")
-            print(f" ├── Cloud Latency Probe : {out.get('cloud_latency_ms')} ms")
-            print(f" ├── Decision Target     : {out.get('routing_target')}")
-            print(f" ├── Evaluator Explanation: {out.get('decision_reasoning')}")
-            print(f" └── Total Execution Time: {out.get('total_roundtrip_ms')} ms")
-            print("-" * 82)
-            
-            iteration += 1
-            time.sleep(1.5)
-            
-    except KeyboardInterrupt:
-        print("\n[!] Demo stopped by user.")
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Replay simulated EdgeSense pump telemetry in real time.")
+    parser.add_argument("--source", type=Path, default=DEFAULT_SIMULATION_DATA)
+    parser.add_argument("--interval", type=float, default=1.0, help="seconds between simulated windows")
+    parser.add_argument("--limit", type=int, default=0, help="stop after this many rows (0 means the whole file)")
+    arguments = parser.parse_args()
+    if arguments.interval < 0 or arguments.limit < 0:
+        parser.error("--interval and --limit must be non-negative")
+    run_simulation(arguments.source, arguments.interval, arguments.limit)

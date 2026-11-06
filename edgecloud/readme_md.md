@@ -11,7 +11,7 @@ The system implements a **"Cloud-First" dynamic offloading architecture**. Under
 ```
                         +---------------------------------+
                         |   Industrial Sensor Telemetry   |
-                        | (Vibration, Current, Timestamp) |
+                        | (21 EdgeSense window features)  |
                         +---------------------------------+
                                          |
                                          v
@@ -47,11 +47,12 @@ The system implements a **"Cloud-First" dynamic offloading architecture**. Under
 
 | File | Type | Description & Purpose |
 | :--- | :--- | :--- |
-| **`decision_engine.py`** | Python Script | **Core Orchestrator:** Probes connection latency, monitors CPU load, evaluates safety/network rules, and dynamically routes incoming telemetry payloads. |
 | **`start.sh`** | Bash Script | **Automated Pipeline Launcher:** Verifies Azure Cloud VM health, rebuilds and launches the local Docker container on Port 8001, and executes the Decision Engine. |
-| **`mock_ml_service.py`** | Python / FastAPI | **Inference Microservice API:** Deployed inside both Docker containers (Local & Azure) to receive telemetry, perform ML prediction, and return severity metrics. |
-| **`Dockerfile`** | Docker Specification | Defines the container image for `mock_ml_service.py` using Python 3.10 slim, setting up dependencies and exposing ports. |
-| **`requirements.txt`** | Text File | List of Python dependencies required for execution (`fastapi`, `uvicorn`, `requests`, `psutil`, `pydantic`, `numpy`). |
+| **`ml_service.py`** | Python / FastAPI | Loads `edgesense_ml/model.joblib` and predicts anomaly probability from the model's 21 named features. |
+| **`../edgesense_ml/model.joblib`** | Model artifact | Trained Random Forest used by the local service and the image deployed to the cloud. |
+| **`decision_engine.py`** | Python Script | **Core Orchestrator:** Probes cloud latency, applies safety/network routing rules, and replays the synthetic feature dataset at one window per second. |
+| **`Dockerfile`** | Docker Specification | Builds from the repository root, packages the trained artifact and installs Python 3.13 / scikit-learn 1.8-compatible dependencies. |
+| **`requirements.txt`** | Text File | Runtime dependencies for the ML API and the host-side decision engine. |
 | **`README.md`** | Markdown Documentation | System architecture overview, execution guide, and evaluator demonstration reference. |
 
 ---
@@ -75,10 +76,10 @@ EMERGENCY_VIB_THRESHOLD = 9.0    # Critical safety trigger -> Execute on Edge im
 
 ### Step 1: Install Dependencies
 
-Ensure Python 3.9+ and Docker are installed on your local machine, then install the required Python packages:
+Ensure Python 3.11+ and Docker are installed, then from the repository root install the required Python packages:
 
 ```bash
-pip install -r requirements.txt
+pip install -r edgecloud/requirements.txt
 ```
 
 ### Step 2: Automated Pipeline Startup
@@ -86,9 +87,25 @@ pip install -r requirements.txt
 Run the master startup script. This script automatically checks your Azure Cloud VM endpoint, cleans and rebuilds your local Edge Docker container, and starts the Decision Engine:
 
 ```bash
-chmod +x start.sh
-./start.sh
+chmod +x edgecloud/start.sh
+./edgecloud/start.sh
 ```
+
+The local API loads the real trained EdgeSense Random Forest model. The startup script forwards options to the simulator; replay 30 bundled synthetic pump feature windows at one window per second with:
+
+```bash
+./edgecloud/start.sh --interval 1 --limit 30
+```
+
+Each row contains 21 features extracted from simulated 20 kHz, one-second windows, plus separate simulation-only fault/label metadata. The true label is printed for comparison but is never passed to the classifier as a feature. This is a timed replay of synthetic data, not live sensor measurements.
+
+To explicitly exercise the local fallback regardless of Azure availability, set `CLOUD_URL` to an unreachable local endpoint when starting:
+
+```bash
+CLOUD_URL=http://127.0.0.1:9/predict ./edgecloud/start.sh --interval 1 --limit 30
+```
+
+To run the same model service on the Azure VM, build this image from the repository root and start it with `SERVICE_LOCATION=AZURE_CLOUD` and `PORT=8002`, exposing port 8002. Configure `CLOUD_URL` on the decision-engine host to that service's `/predict` endpoint. The cloud and local APIs must use this same feature payload contract.
 
 ### Step 3: Stream Live Azure Cloud Logs (Optional)
 
@@ -157,3 +174,7 @@ sudo tc qdisc del dev wlan0 root
 | **Critical Emergency** | Vib $\ge 9.0$ | **`LOCAL_EDGE`** | `CRITICAL EMERGENCY -> Immediate local safety action (0ms WAN lag)` |
 | **Network Lag / Loss** | WAN Latency $> 100\text{ ms}$ or Timeout | **`LOCAL_EDGE`** | `NETWORK DEGRADED -> Local Edge Fallback` |
 | **Laptop Overload** | Local Laptop CPU $> 80\%$ | **`AZURE_CLOUD`** | `CPU OVERLOAD -> Offloading to Azure Cloud` |
+
+## 🧠 Model input and limits
+
+The API request contains a `features` object with the 21 columns listed in `edgesense_ml/report.json`. The service returns the model's anomaly flag, uncalibrated `P(anomaly)`, and inference time; it does not invent a fault severity. The simulator CSV was generated by `edgesense_ml/simulate_dataset.py`; the model's reported validation results are on simulated data, not real pump measurements. Real signals must be sampled at 20 kHz, transformed with the same feature definitions, and validated against labeled real-world data before operational use.
