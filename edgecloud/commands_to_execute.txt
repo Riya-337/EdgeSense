@@ -1,0 +1,32 @@
+# 1. Go to project directory
+cd ~/EdgeSense
+
+# 2. Start Docker locally
+sudo systemctl start docker
+
+# 3. Start local edge service
+docker compose -f edgecloud/docker-compose.yml up -d edge-ml-service
+
+# 4. Verify local edge
+docker ps
+
+# 5. Test local edge
+curl http://localhost:8001/
+
+# 6. SSH into Azure VM (separate terminal)
+ssh -i edgecloud/cloudkey.pem cloudvm@20.204.11.46
+
+# 7. Once inside Azure, check cloud container
+sudo docker ps
+
+# 8. Exit Azure session when finished
+exit
+
+# 9. Start decision engine locally
+python3 edgecloud/decision_engine.py
+
+sudo tc qdisc add dev wlo1 root netem delay 150ms
+# 10 add 150 ms delay to azure
+
+sudo tc qdisc del dev wlo1 root
+#11 remove delay

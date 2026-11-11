@@ -99,6 +99,8 @@ The local API loads the real trained EdgeSense Random Forest model. The startup 
 
 Each row contains 21 features extracted from simulated 20 kHz, one-second windows, plus separate simulation-only fault/label metadata. The true label is printed for comparison but is never passed to the classifier as a feature. This is a timed replay of synthetic data, not live sensor measurements.
 
+Each replay output line is a JSON prediction event with `timestamp`, all `features`, `anomaly_detected`, `anomaly_probability`, `processing_location`, `cloud_latency_ms`, `inference_time_ms`, `total_round_trip_time_ms`, `routing_decision`, `routing_reason`, `data_source`, and `ground_truth`. `ground_truth` is present only for synthetic rows. `cloud_latency_ms` is the measured cloud health-probe time and is `null` when the probe fails; the internal `9999` routing sentinel is not reported as a measured latency. Existing response fields remain available alongside the `event` object for compatibility.
+
 To explicitly exercise the local fallback regardless of Azure availability, set `CLOUD_URL` to an unreachable local endpoint when starting:
 
 ```bash

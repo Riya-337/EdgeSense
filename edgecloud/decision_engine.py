@@ -1,6 +1,8 @@
 import csv
+import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,57 @@ class EdgeSenseDecisionEngine:
             "cloud_latency_ms": cloud_latency
         }
 
+    @staticmethod
+    def prediction_event(
+        sensor_payload: dict[str, Any],
+        prediction: dict[str, Any],
+        cloud_latency_ms: float,
+        total_round_trip_time_ms: float,
+        routing_decision: str,
+        routing_reason: str,
+    ) -> dict[str, Any]:
+        simulation = sensor_payload.get("simulation")
+        data_source = sensor_payload.get("data_source")
+        if data_source not in {"synthetic", "real"}:
+            data_source = "synthetic" if isinstance(simulation, dict) and "label" in simulation else "real"
+
+        measured_cloud_latency = (
+            round(cloud_latency_ms, 2) if cloud_latency_ms < 9999.0 else None
+        )
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "features": dict(sensor_payload.get("features", {})),
+            "anomaly_detected": prediction.get("is_anomaly"),
+            "anomaly_probability": prediction.get("confidence"),
+            "processing_location": prediction.get("processed_by"),
+            "cloud_latency_ms": measured_cloud_latency,
+            "inference_time_ms": prediction.get("inference_time_ms"),
+            "total_round_trip_time_ms": round(total_round_trip_time_ms, 2),
+            "routing_decision": routing_decision,
+            "routing_reason": routing_reason,
+            "data_source": data_source,
+            "ground_truth": simulation if data_source == "synthetic" else None,
+        }
+
+    @staticmethod
+    def _attach_event(
+        prediction: dict[str, Any],
+        sensor_payload: dict[str, Any],
+        cloud_latency_ms: float,
+        total_round_trip_time_ms: float,
+        routing_decision: str,
+        routing_reason: str,
+    ) -> dict[str, Any]:
+        prediction["event"] = EdgeSenseDecisionEngine.prediction_event(
+            sensor_payload,
+            prediction,
+            cloud_latency_ms,
+            total_round_trip_time_ms,
+            routing_decision,
+            routing_reason,
+        )
+        return prediction
+
     def process_telemetry(self, sensor_payload: dict[str, Any]) -> dict[str, Any]:
         metrics = self.inspect_system()
         cloud_lat = metrics["cloud_latency_ms"]
@@ -68,21 +121,27 @@ class EdgeSenseDecisionEngine:
             reasoning = "PRIMARY DEFAULT STATE -> Data routed directly to Azure Cloud"
 
         # --- EXECUTION ---
-        start_exec = time.time()
+        start_exec = time.perf_counter()
         
         if target == "AZURE_CLOUD":
             try:
                 res = requests.post(CLOUD_URL, json=sensor_payload, timeout=0.8)
-                print("AZURE RESPONSE:", res.status_code, res.text)
                 res.raise_for_status()
                 out = res.json()
+                total_round_trip_time_ms = (time.perf_counter() - start_exec) * 1000
                 out["routing_target"] = "AZURE_CLOUD"
                 out["decision_reasoning"] = reasoning
-                out["cloud_latency_ms"] = round(cloud_lat, 2)
-                out["total_roundtrip_ms"] = round((time.time() - start_exec) * 1000, 2)
-                return out
+                out["cloud_latency_ms"] = round(cloud_lat, 2) if cloud_lat < 9999.0 else None
+                out["total_roundtrip_ms"] = round(total_round_trip_time_ms, 2)
+                return self._attach_event(
+                    out,
+                    sensor_payload,
+                    cloud_lat,
+                    total_round_trip_time_ms,
+                    "AZURE_CLOUD",
+                    reasoning,
+                )
             except requests.RequestException as e:
-                print(f"[CLOUD POST FAILED] {type(e).__name__}: {e}")
                 target = "LOCAL_EDGE (FALLBACK)"
                 reasoning += " | [AZURE REQUEST FAILED -> AUTOMATIC EDGE FALLBACK]"
 
@@ -91,17 +150,30 @@ class EdgeSenseDecisionEngine:
             res = requests.post(LOCAL_EDGE_URL, json=sensor_payload, timeout=1.0)
             res.raise_for_status()
             out = res.json()
+            total_round_trip_time_ms = (time.perf_counter() - start_exec) * 1000
             out["routing_target"] = target
             out["decision_reasoning"] = reasoning
-            out["cloud_latency_ms"] = round(cloud_lat, 2)
-            out["total_roundtrip_ms"] = round((time.time() - start_exec) * 1000, 2)
-            return out
+            out["cloud_latency_ms"] = round(cloud_lat, 2) if cloud_lat < 9999.0 else None
+            out["total_roundtrip_ms"] = round(total_round_trip_time_ms, 2)
+            route = "LOCAL_EDGE_FALLBACK" if target == "LOCAL_EDGE (FALLBACK)" else "LOCAL_EDGE"
+            return self._attach_event(
+                out, sensor_payload, cloud_lat, total_round_trip_time_ms, route, reasoning
+            )
         except requests.RequestException as e:
-            return {
+            error = {
                 "processed_by": "ERROR",
                 "decision_reasoning": f"Local Edge unavailable: {e}",
-                "cloud_latency_ms": round(cloud_lat, 2)
+                "cloud_latency_ms": round(cloud_lat, 2) if cloud_lat < 9999.0 else None,
             }
+            route = "LOCAL_EDGE_FALLBACK" if target == "LOCAL_EDGE (FALLBACK)" else "LOCAL_EDGE"
+            return self._attach_event(
+                error,
+                sensor_payload,
+                cloud_lat,
+                (time.perf_counter() - start_exec) * 1000,
+                route,
+                reasoning,
+            )
 
 def simulation_payload(row: dict[str, str]) -> dict[str, Any]:
     metadata = {name: row[name] for name in SIMULATION_METADATA}
@@ -110,7 +182,7 @@ def simulation_payload(row: dict[str, str]) -> dict[str, Any]:
         for name, value in row.items()
         if name not in SIMULATION_METADATA
     }
-    return {"features": features, "simulation": metadata}
+    return {"features": features, "simulation": metadata, "data_source": "synthetic"}
 
 
 def run_simulation(source: Path, interval: float, limit: int) -> None:
@@ -124,17 +196,8 @@ def run_simulation(source: Path, interval: float, limit: int) -> None:
         for iteration, row in enumerate(rows, start=1):
             started = time.monotonic()
             payload = simulation_payload(row)
-            features = payload["features"]
             out = engine.process_telemetry(payload)
-            print(
-                f"[{iteration}] {row['condition']} | "
-                f"truth={int(row['label'])} prediction={out.get('is_anomaly')} "
-                f"P(anomaly)={out.get('confidence')} | "
-                f"vib_rms={features['vib_rms']:.3f} cur_rms={features['cur_rms']:.3f} | "
-                f"route={out.get('routing_target')} "
-                f"cloud={out.get('cloud_latency_ms')}ms "
-                f"roundtrip={out.get('total_roundtrip_ms')}ms"
-            )
+            print(json.dumps(out["event"], allow_nan=False))
             if limit and iteration >= limit:
                 break
             time.sleep(max(0.0, interval - (time.monotonic() - started)))
