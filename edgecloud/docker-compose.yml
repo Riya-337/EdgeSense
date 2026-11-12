@@ -8,10 +8,10 @@ services:
     container_name: edgesense_local_ml
     command: python ml_service.py
     environment:
-      SERVICE_LOCATION: LOCAL_EDGE
-      PORT: 8001
+      SERVICE_LOCATION: ${SERVICE_LOCATION:-LOCAL_EDGE}
+      PORT: ${PORT:-8001}
     ports:
-      - "8001:8001"
+      - "${PORT:-8001}:${PORT:-8001}"
     deploy:
       resources:
         limits:
@@ -25,5 +25,8 @@ services:
     container_name: edgesense_engine
     command: python decision_engine.py
     network_mode: "host"   # Allows monitoring host network interfaces
+    environment:
+      CLOUD_URL: ${CLOUD_URL:-http://20.204.11.46:8002/predict}
+      LOCAL_EDGE_URL: ${LOCAL_EDGE_URL:-http://localhost:8001/predict}
     depends_on:
       - edge-ml-service

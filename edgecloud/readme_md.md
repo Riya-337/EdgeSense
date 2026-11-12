@@ -63,7 +63,7 @@ All system thresholds are configured within `decision_engine.py`:
 
 ```python
 LOCAL_EDGE_URL = "http://localhost:8001/predict"
-CLOUD_URL = "http://20.204.11.46:8002/predict"
+CLOUD_URL = os.getenv("CLOUD_URL", "http://20.204.11.46:8002/predict")
 
 MAX_LATENCY_THRESHOLD_MS = 100.0  # Offload to local if Cloud WAN > 100ms
 MAX_EDGE_CPU_THRESHOLD_PCT = 80.0 # Offload to cloud if Local CPU > 80%
@@ -98,6 +98,36 @@ The local API loads the real trained EdgeSense Random Forest model. The startup 
 ```
 
 Each row contains 21 features extracted from simulated 20 kHz, one-second windows, plus separate simulation-only fault/label metadata. The true label is printed for comparison but is never passed to the classifier as a feature. This is a timed replay of synthetic data, not live sensor measurements.
+
+### Deploy the cloud copy
+
+The edge and cloud services are **separate instances of the same complete model**, built from `edgesense_ml/model.joblib`; inference is not split between the machines. On the Azure VM, clone the repository and start only the model API on port 8002:
+
+```bash
+git clone <repository-url> EdgeSense
+cd EdgeSense
+SERVICE_LOCATION=AZURE_CLOUD PORT=8002 \
+  docker compose -f edgecloud/docker-compose.yml up -d --build edge-ml-service
+curl http://localhost:8002/
+```
+
+Allow inbound TCP port 8002 in the Azure network security group, preferably only from the edge host (or use a private network). The health response should report `"location":"AZURE_CLOUD"`. The edge host uses that cloud API by default; override it with `CLOUD_URL` if the VM address differs:
+
+```bash
+CLOUD_URL=http://<azure-vm-address>:8002/predict ./edgecloud/start.sh --interval 0 --limit 30
+```
+
+The decision engine sends normal windows to Azure. Critical vibration or high/unreachable cloud latency routes directly to edge; a failed cloud prediction request also retries the window on edge.
+
+### Replay dataset predictions
+
+`edgesense_ml/simulated_features.csv` is the bundled test dataset. To predict all its rows as quickly as service calls allow, use `--interval 0` and `--limit 0` (zero limit means all rows). To run a smaller smoke test, use `--limit 30`. Each JSON event includes the prediction, processing location, routing decision, and synthetic ground truth for comparison. These are simulated test cases, not real sensor measurements.
+
+Run the routing tests from the repository root:
+
+```bash
+python3 -m unittest discover -s edgecloud -p 'test_*.py'
+```
 
 Each replay output line is a JSON prediction event with `timestamp`, all `features`, `anomaly_detected`, `anomaly_probability`, `processing_location`, `cloud_latency_ms`, `inference_time_ms`, `total_round_trip_time_ms`, `routing_decision`, `routing_reason`, `data_source`, and `ground_truth`. `ground_truth` is present only for synthetic rows. `cloud_latency_ms` is the measured cloud health-probe time and is `null` when the probe fails; the internal `9999` routing sentinel is not reported as a measured latency. Existing response fields remain available alongside the `event` object for compatibility.
 

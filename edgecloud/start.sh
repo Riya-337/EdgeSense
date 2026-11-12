@@ -7,13 +7,14 @@ echo "========================================================="
 echo "       EDGESENSE HYBRID EDGE-CLOUD STARTUP SCRIPT        "
 echo "========================================================="
 
-AZURE_IP="20.204.11.46"
-CLOUD_PORT="8002"
+CLOUD_URL="${CLOUD_URL:-http://20.204.11.46:8002/predict}"
+CLOUD_HEALTH_URL="${CLOUD_HEALTH_URL:-${CLOUD_URL%/predict}/}"
+export CLOUD_URL
 EDGE_PORT="8001"
 
 # 1. Check Azure Cloud VM Health
-echo -e "\n[1/3] Checking Azure Cloud Service ($AZURE_IP:$CLOUD_PORT)..."
-AZURE_RESPONSE=$(curl -fsS --max-time 3 "http://$AZURE_IP:$CLOUD_PORT/" 2>/dev/null || true)
+echo -e "\n[1/3] Checking Azure Cloud Service ($CLOUD_HEALTH_URL)..."
+AZURE_RESPONSE=$(curl -fsS --max-time 3 "$CLOUD_HEALTH_URL" 2>/dev/null || true)
 
 if printf '%s' "$AZURE_RESPONSE" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok".*"location"[[:space:]]*:[[:space:]]*"AZURE_CLOUD"'; then
     echo " -> Azure Cloud ML Service is LIVE!"
@@ -38,7 +39,9 @@ echo " -> Building local Docker image..."
 docker build -q -f "$SCRIPT_DIR/Dockerfile" -t edgesense-edge "$REPO_ROOT"
 
 echo " -> Starting local Edge container..."
-docker run -d -p $EDGE_PORT:$EDGE_PORT --name edge_ml edgesense-edge
+docker run -d -p "$EDGE_PORT:$EDGE_PORT" \
+    -e SERVICE_LOCATION=LOCAL_EDGE -e PORT="$EDGE_PORT" \
+    --name edge_ml edgesense-edge
 
 sleep 2
 LOCAL_STATUS=$(curl -s --max-time 3 http://localhost:$EDGE_PORT/ | grep "LOCAL_EDGE")

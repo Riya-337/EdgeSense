@@ -30,3 +30,6 @@ sudo tc qdisc add dev wlo1 root netem delay 150ms
 
 sudo tc qdisc del dev wlo1 root
 #11 remove delay
+
+#view logs
+sudo docker logs -f cloud_ml_new

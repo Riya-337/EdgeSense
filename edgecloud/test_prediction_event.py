@@ -3,6 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import requests
+
 from decision_engine import EdgeSenseDecisionEngine, simulation_payload
 
 
@@ -27,9 +29,10 @@ class PredictionEventTests(unittest.TestCase):
         engine = EdgeSenseDecisionEngine()
         engine.inspect_system = Mock(return_value={"edge_cpu": 0.0, "cloud_latency_ms": 25.0})
 
-        with patch("decision_engine.requests.post", return_value=response):
+        with patch("decision_engine.requests.post", return_value=response) as post:
             result = engine.process_telemetry(payload)
 
+        self.assertIn("20.204.11.46:8002/predict", post.call_args.args[0])
         event = result["event"]
         expected_feature_names = set(row) - {
             "label", "fault", "severity", "speed", "condition", "hum"
@@ -45,6 +48,36 @@ class PredictionEventTests(unittest.TestCase):
         self.assertEqual(event["inference_time_ms"], 12.5)
         self.assertIsNotNone(event["total_round_trip_time_ms"])
         self.assertEqual(event["routing_decision"], "AZURE_CLOUD")
+
+    def test_cloud_request_failure_falls_back_to_edge(self):
+        payload = {
+            "features": {"vib_peak": 1.0},
+            "data_source": "real",
+        }
+        edge_response = Mock()
+        edge_response.raise_for_status.return_value = None
+        edge_response.json.return_value = {
+            "processed_by": "LOCAL_EDGE",
+            "is_anomaly": False,
+            "confidence": 0.12,
+            "inference_time_ms": 8.0,
+        }
+        engine = EdgeSenseDecisionEngine()
+        engine.inspect_system = Mock(return_value={"edge_cpu": 0.0, "cloud_latency_ms": 25.0})
+
+        with patch(
+            "decision_engine.requests.post",
+            side_effect=[requests.ConnectionError("cloud unavailable"), edge_response],
+        ) as post:
+            result = engine.process_telemetry(payload)
+
+        self.assertEqual(post.call_count, 2)
+        self.assertIn("20.204.11.46:8002/predict", post.call_args_list[0].args[0])
+        self.assertIn("localhost:8001/predict", post.call_args_list[1].args[0])
+        event = result["event"]
+        self.assertEqual(event["processing_location"], "LOCAL_EDGE")
+        self.assertEqual(event["routing_decision"], "LOCAL_EDGE_FALLBACK")
+        self.assertIn("AUTOMATIC EDGE FALLBACK", event["routing_reason"])
 
     def test_real_event_has_no_ground_truth_and_unavailable_latency_is_null(self):
         payload = {
